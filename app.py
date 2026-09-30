@@ -36,6 +36,19 @@ if "keyword_input" not in st.session_state:
 if "min_views_input" not in st.session_state:
     st.session_state.min_views_input = 0
 
+if "min_subs_input" not in st.session_state:
+    st.session_state.min_subs_input = 0
+
+# Função para formatação compacta de números (ex: 50K, 1.2M)
+def format_compact_number(num: int) -> str:
+    if num >= 1_000_000:
+        val = num / 1_000_000
+        return f"{val:.1f}M".replace(".0M", "M")
+    elif num >= 1_000:
+        val = num / 1_000
+        return f"{val:.1f}K".replace(".0K", "K")
+    return str(num)
+
 # Função para renderizar botão HTML/JS de cópia para a área de transferência
 def render_copy_button(text_to_copy: str):
     escaped_text = json.dumps(text_to_copy)
@@ -136,7 +149,7 @@ def render_copy_button(text_to_copy: str):
 
 # Título da Aplicação
 st.markdown('<div class="main-title">🎥 Extrator de Links do YouTube</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Busque vídeos por palavra-chave, filtre por visualizações e obtenha links prontos para cópia em massa.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Busque vídeos por palavra-chave, aplique filtros avançados de visualizações e inscritos, e copie links em massa.</div>', unsafe_allow_html=True)
 
 # Obter a chave da API a partir do st.secrets
 api_key = st.secrets.get("YOUTUBE_API_KEY", "")
@@ -159,15 +172,28 @@ keyword = st.text_input(
     key="keyword_input"
 )
 
-# Campo opcional para filtro de visualizações mínimas
-min_views = st.number_input(
-    label="Visualizações mínimas (deixe 0 para trazer todos):",
-    min_value=0,
-    value=0,
-    step=1000,
-    key="min_views_input",
-    help="Filtra apenas os vídeos que possuem quantidade de visualizações igual ou maior que este valor."
-)
+# Filtros avançados: Visualizações e Inscritos lado a lado
+col_views, col_subs = st.columns(2)
+
+with col_views:
+    min_views = st.number_input(
+        label="Visualizações mínimas (deixe 0 para todos):",
+        min_value=0,
+        value=0,
+        step=1000,
+        key="min_views_input",
+        help="Filtra apenas os vídeos que possuem quantidade de visualizações igual ou maior que este valor."
+    )
+
+with col_subs:
+    min_subs = st.number_input(
+        label="Inscritos mínimos (deixe 0 para todos):",
+        min_value=0,
+        value=0,
+        step=1000,
+        key="min_subs_input",
+        help="Filtra apenas os vídeos cujo canal possui quantidade de inscritos igual ou maior que este valor."
+    )
 
 # Botão de busca
 search_clicked = st.button("Buscar Links", type="primary", use_container_width=True)
@@ -178,10 +204,10 @@ if search_clicked:
     elif not api_key or api_key == "SUA_CHAVE_API_AQUI":
         st.error("Por favor, configure a chave de API em `.streamlit/secrets.toml` antes de buscar.")
     else:
-        with st.spinner("Consultando a YouTube Data API v3..."):
+        with st.spinner("Consultando YouTube Data API v3 (/search, /videos, /channels)..."):
             search_endpoint = "https://www.googleapis.com/youtube/v3/search"
             search_params = {
-                "part": "id",
+                "part": "id,snippet",
                 "q": keyword.strip(),
                 "type": "video",
                 "maxResults": 50,
@@ -203,7 +229,7 @@ if search_clicked:
                     ]
 
                     if video_ids:
-                        # 2ª Requisição: Obtenção de estatísticas detalhadas e snippet via endpoint /videos
+                        # 2ª Requisição: Estatísticas e detalhes dos vídeos via endpoint /videos
                         videos_endpoint = "https://www.googleapis.com/youtube/v3/videos"
                         videos_params = {
                             "part": "snippet,statistics",
@@ -216,20 +242,49 @@ if search_clicked:
 
                         if videos_response.status_code == 200:
                             video_items = videos_data.get("items", [])
-                            
+
+                            # Extração dos IDs únicos de canais
+                            channel_ids = list({
+                                item.get("snippet", {}).get("channelId")
+                                for item in video_items
+                                if item.get("snippet", {}).get("channelId")
+                            })
+
+                            # 3ª Requisição: Estatísticas dos canais via endpoint /channels (em lote)
+                            channel_subs_map = {}
+                            if channel_ids:
+                                channels_endpoint = "https://www.googleapis.com/youtube/v3/channels"
+                                channels_params = {
+                                    "part": "statistics",
+                                    "id": ",".join(channel_ids),
+                                    "key": api_key
+                                }
+
+                                channels_response = requests.get(channels_endpoint, params=channels_params, timeout=15)
+                                if channels_response.status_code == 200:
+                                    channels_data = channels_response.json()
+                                    for ch_item in channels_data.get("items", []):
+                                        ch_id = ch_item.get("id")
+                                        subs_raw = ch_item.get("statistics", {}).get("subscriberCount", "0")
+                                        subs_count = int(subs_raw) if str(subs_raw).isdigit() else 0
+                                        channel_subs_map[ch_id] = subs_count
+
+                            # Filtragem em Python: viewCount >= min_views E subscriberCount >= min_subs
                             video_links = []
                             video_details = []
 
-                            # Filtragem em Python pelo número de visualizações mínimas
                             for item in video_items:
                                 vid = item.get("id")
                                 snippet = item.get("snippet", {})
                                 statistics = item.get("statistics", {})
+                                cid = snippet.get("channelId")
 
                                 view_count_raw = statistics.get("viewCount", "0")
                                 view_count = int(view_count_raw) if str(view_count_raw).isdigit() else 0
 
-                                if view_count >= min_views:
+                                subscriber_count = channel_subs_map.get(cid, 0)
+
+                                if view_count >= min_views and subscriber_count >= min_subs:
                                     url = f"https://www.youtube.com/watch?v={vid}"
                                     title = snippet.get("title", "Sem título")
                                     channel = snippet.get("channelTitle", "Canal desconhecido")
@@ -239,7 +294,8 @@ if search_clicked:
                                         "title": title,
                                         "channel": channel,
                                         "url": url,
-                                        "views": view_count
+                                        "views": view_count,
+                                        "subscribers": subscriber_count
                                     })
 
                             if video_links:
@@ -247,13 +303,14 @@ if search_clicked:
                                 st.session_state.search_results = {
                                     "keyword": keyword.strip(),
                                     "min_views": min_views,
+                                    "min_subs": min_subs,
                                     "video_links": video_links,
                                     "video_details": video_details,
                                     "links_text": links_text
                                 }
                             else:
                                 st.session_state.search_results = None
-                                st.warning(f"Foram encontrados vídeos, mas nenhum atingiu o mínimo de **{min_views:,}** visualizações.".replace(",", "."))
+                                st.warning("Foram encontrados vídeos, mas nenhum atendeu aos critérios de visualizações e/ou inscritos mínimos.")
                         else:
                             st.session_state.search_results = None
                             err_info = videos_data.get("error", {})
@@ -284,11 +341,18 @@ if st.session_state.search_results:
     results = st.session_state.search_results
     keyword_used = results["keyword"]
     min_views_used = results.get("min_views", 0)
+    min_subs_used = results.get("min_subs", 0)
     video_links = results["video_links"]
     video_details = results["video_details"]
     links_text = results["links_text"]
 
-    filter_msg = f" (com mínimo de {min_views_used:,} views)".replace(",", ".") if min_views_used > 0 else ""
+    filter_tags = []
+    if min_views_used > 0:
+        filter_tags.append(f"≥ {min_views_used:,} views".replace(",", "."))
+    if min_subs_used > 0:
+        filter_tags.append(f"≥ {format_compact_number(min_subs_used)} inscritos")
+    filter_msg = f" (filtros: {', '.join(filter_tags)})" if filter_tags else ""
+
     st.success(f"Foram encontrados **{len(video_links)}** vídeos para a busca: *'{keyword_used}'*{filter_msg}")
     
     # Text area para cópia em massa
@@ -323,12 +387,14 @@ if st.session_state.search_results:
             st.session_state.search_results = None
             st.session_state.keyword_input = ""
             st.session_state.min_views_input = 0
+            st.session_state.min_subs_input = 0
             st.rerun()
 
-    # Exibição dos detalhes dos vídeos encontrados com contagem de views formatada
+    # Exibição dos detalhes dos vídeos encontrados com views e inscritos formatados
     with st.expander("🔍 Ver detalhes dos vídeos encontrados"):
         for idx, detail in enumerate(video_details, 1):
             views_formatted = f"{detail['views']:,}".replace(",", ".")
+            subs_formatted = format_compact_number(detail.get("subscribers", 0))
             st.markdown(
-                f"**{idx}. [{detail['title']}]({detail['url']})** — 👁️ **{views_formatted}** visualizações — *{detail['channel']}*"
+                f"**{idx}. [{detail['title']}]({detail['url']})** — 👁️ **{views_formatted}** views — 👤 *{detail['channel']}* (**{subs_formatted}** inscritos)"
             )
