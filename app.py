@@ -26,12 +26,34 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Mapeamento de Países para ISO 3166-1 alpha-2
+COUNTRY_OPTIONS = {
+    "Qualquer País": "",
+    "Brasil (BR)": "BR",
+    "Estados Unidos (US)": "US",
+    "Portugal (PT)": "PT",
+    "Reino Unido (GB)": "GB",
+    "Espanha (ES)": "ES",
+    "Canadá (CA)": "CA",
+    "França (FR)": "FR",
+    "Alemanha (DE)": "DE",
+    "Itália (IT)": "IT",
+    "México (MX)": "MX",
+    "Argentina (AR)": "AR",
+    "Japão (JP)": "JP",
+    "Austrália (AU)": "AU",
+    "Índia (IN)": "IN"
+}
+
 # Inicialização do estado da sessão (st.session_state)
 if "search_results" not in st.session_state:
     st.session_state.search_results = None
 
 if "keyword_input" not in st.session_state:
     st.session_state.keyword_input = ""
+
+if "country_input" not in st.session_state:
+    st.session_state.country_input = "Qualquer País"
 
 if "min_views_input" not in st.session_state:
     st.session_state.min_views_input = 0
@@ -149,7 +171,7 @@ def render_copy_button(text_to_copy: str):
 
 # Título da Aplicação
 st.markdown('<div class="main-title">🎥 Extrator de Links do YouTube</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Busque vídeos por palavra-chave, aplique filtros avançados de visualizações e inscritos, e copie links em massa.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Busque vídeos por palavra-chave, país e métricas mínimas, e copie links em massa.</div>', unsafe_allow_html=True)
 
 # Obter a chave da API a partir do st.secrets
 api_key = st.secrets.get("YOUTUBE_API_KEY", "")
@@ -172,27 +194,35 @@ keyword = st.text_input(
     key="keyword_input"
 )
 
-# Filtros avançados: Visualizações e Inscritos lado a lado
-col_views, col_subs = st.columns(2)
+# Filtros avançados: País, Visualizações e Inscritos em 3 colunas
+col_country, col_views, col_subs = st.columns([1.2, 1, 1])
+
+with col_country:
+    selected_country_label = st.selectbox(
+        label="País:",
+        options=list(COUNTRY_OPTIONS.keys()),
+        key="country_input",
+        help="Filtra a pesquisa para vídeos populares e relevantes no país selecionado."
+    )
 
 with col_views:
     min_views = st.number_input(
-        label="Visualizações mínimas (deixe 0 para todos):",
+        label="Visualizações mínimas:",
         min_value=0,
         value=0,
         step=1000,
         key="min_views_input",
-        help="Filtra apenas os vídeos que possuem quantidade de visualizações igual ou maior que este valor."
+        help="Filtra apenas os vídeos com visualizações iguais ou maiores que este valor (0 = todos)."
     )
 
 with col_subs:
     min_subs = st.number_input(
-        label="Inscritos mínimos (deixe 0 para todos):",
+        label="Inscritos mínimos:",
         min_value=0,
         value=0,
         step=1000,
         key="min_subs_input",
-        help="Filtra apenas os vídeos cujo canal possui quantidade de inscritos igual ou maior que este valor."
+        help="Filtra apenas canais com inscritos iguais ou maiores que este valor (0 = todos)."
     )
 
 # Botão de busca
@@ -215,8 +245,13 @@ if search_clicked:
                 "key": api_key
             }
 
+            # Adiciona o regionCode se um país específico foi selecionado
+            region_code = COUNTRY_OPTIONS.get(selected_country_label, "")
+            if region_code:
+                search_params["regionCode"] = region_code
+
             try:
-                # 1ª Requisição: Busca de vídeos ordenados por viewCount
+                # 1ª Requisição: Busca de vídeos ordenados por viewCount (e regionCode se aplicável)
                 search_response = requests.get(search_endpoint, params=search_params, timeout=15)
                 search_data = search_response.json()
 
@@ -302,6 +337,7 @@ if search_clicked:
                                 links_text = "\n".join(video_links)
                                 st.session_state.search_results = {
                                     "keyword": keyword.strip(),
+                                    "country": selected_country_label,
                                     "min_views": min_views,
                                     "min_subs": min_subs,
                                     "video_links": video_links,
@@ -310,7 +346,7 @@ if search_clicked:
                                 }
                             else:
                                 st.session_state.search_results = None
-                                st.warning("Foram encontrados vídeos, mas nenhum atendeu aos critérios de visualizações e/ou inscritos mínimos.")
+                                st.warning("Foram encontrados vídeos, mas nenhum atendeu aos critérios de filtros aplicados.")
                         else:
                             st.session_state.search_results = None
                             err_info = videos_data.get("error", {})
@@ -340,6 +376,7 @@ if search_clicked:
 if st.session_state.search_results:
     results = st.session_state.search_results
     keyword_used = results["keyword"]
+    country_used = results.get("country", "Qualquer País")
     min_views_used = results.get("min_views", 0)
     min_subs_used = results.get("min_subs", 0)
     video_links = results["video_links"]
@@ -347,11 +384,13 @@ if st.session_state.search_results:
     links_text = results["links_text"]
 
     filter_tags = []
+    if country_used != "Qualquer País":
+        filter_tags.append(f"País: {country_used}")
     if min_views_used > 0:
         filter_tags.append(f"≥ {min_views_used:,} views".replace(",", "."))
     if min_subs_used > 0:
         filter_tags.append(f"≥ {format_compact_number(min_subs_used)} inscritos")
-    filter_msg = f" (filtros: {', '.join(filter_tags)})" if filter_tags else ""
+    filter_msg = f" ({', '.join(filter_tags)})" if filter_tags else ""
 
     st.success(f"Foram encontrados **{len(video_links)}** vídeos para a busca: *'{keyword_used}'*{filter_msg}")
     
@@ -386,6 +425,7 @@ if st.session_state.search_results:
         if st.button("🗑️ Limpar", use_container_width=True):
             st.session_state.search_results = None
             st.session_state.keyword_input = ""
+            st.session_state.country_input = "Qualquer País"
             st.session_state.min_views_input = 0
             st.session_state.min_subs_input = 0
             st.rerun()
