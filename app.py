@@ -33,6 +33,9 @@ if "search_results" not in st.session_state:
 if "keyword_input" not in st.session_state:
     st.session_state.keyword_input = ""
 
+if "min_views_input" not in st.session_state:
+    st.session_state.min_views_input = 0
+
 # Função para renderizar botão HTML/JS de cópia para a área de transferência
 def render_copy_button(text_to_copy: str):
     escaped_text = json.dumps(text_to_copy)
@@ -133,7 +136,7 @@ def render_copy_button(text_to_copy: str):
 
 # Título da Aplicação
 st.markdown('<div class="main-title">🎥 Extrator de Links do YouTube</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Busque vídeos por palavra-chave e obtenha links prontos para cópia em massa.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Busque vídeos por palavra-chave, filtre por visualizações e obtenha links prontos para cópia em massa.</div>', unsafe_allow_html=True)
 
 # Obter a chave da API a partir do st.secrets
 api_key = st.secrets.get("YOUTUBE_API_KEY", "")
@@ -156,6 +159,16 @@ keyword = st.text_input(
     key="keyword_input"
 )
 
+# Campo opcional para filtro de visualizações mínimas
+min_views = st.number_input(
+    label="Visualizações mínimas (deixe 0 para trazer todos):",
+    min_value=0,
+    value=0,
+    step=1000,
+    key="min_views_input",
+    help="Filtra apenas os vídeos que possuem quantidade de visualizações igual ou maior que este valor."
+)
+
 # Botão de busca
 search_clicked = st.button("Buscar Links", type="primary", use_container_width=True)
 
@@ -166,52 +179,94 @@ if search_clicked:
         st.error("Por favor, configure a chave de API em `.streamlit/secrets.toml` antes de buscar.")
     else:
         with st.spinner("Consultando a YouTube Data API v3..."):
-            endpoint = "https://www.googleapis.com/youtube/v3/search"
-            params = {
-                "part": "id,snippet",
+            search_endpoint = "https://www.googleapis.com/youtube/v3/search"
+            search_params = {
+                "part": "id",
                 "q": keyword.strip(),
                 "type": "video",
                 "maxResults": 50,
+                "order": "viewCount",
                 "key": api_key
             }
 
             try:
-                response = requests.get(endpoint, params=params, timeout=15)
-                data = response.json()
+                # 1ª Requisição: Busca de vídeos ordenados por viewCount
+                search_response = requests.get(search_endpoint, params=search_params, timeout=15)
+                search_data = search_response.json()
 
-                if response.status_code == 200:
-                    items = data.get("items", [])
-                    
-                    video_links = []
-                    video_details = []
+                if search_response.status_code == 200:
+                    search_items = search_data.get("items", [])
+                    video_ids = [
+                        item["id"]["videoId"]
+                        for item in search_items
+                        if item.get("id", {}).get("videoId")
+                    ]
 
-                    for item in items:
-                        video_id = item.get("id", {}).get("videoId")
-                        if video_id:
-                            url = f"https://www.youtube.com/watch?v={video_id}"
-                            title = item.get("snippet", {}).get("title", "Sem título")
-                            channel = item.get("snippet", {}).get("channelTitle", "Canal desconhecido")
-                            
-                            video_links.append(url)
-                            video_details.append({"title": title, "channel": channel, "url": url})
-
-                    if video_links:
-                        links_text = "\n".join(video_links)
-                        st.session_state.search_results = {
-                            "keyword": keyword.strip(),
-                            "video_links": video_links,
-                            "video_details": video_details,
-                            "links_text": links_text
+                    if video_ids:
+                        # 2ª Requisição: Obtenção de estatísticas detalhadas e snippet via endpoint /videos
+                        videos_endpoint = "https://www.googleapis.com/youtube/v3/videos"
+                        videos_params = {
+                            "part": "snippet,statistics",
+                            "id": ",".join(video_ids),
+                            "key": api_key
                         }
+
+                        videos_response = requests.get(videos_endpoint, params=videos_params, timeout=15)
+                        videos_data = videos_response.json()
+
+                        if videos_response.status_code == 200:
+                            video_items = videos_data.get("items", [])
+                            
+                            video_links = []
+                            video_details = []
+
+                            # Filtragem em Python pelo número de visualizações mínimas
+                            for item in video_items:
+                                vid = item.get("id")
+                                snippet = item.get("snippet", {})
+                                statistics = item.get("statistics", {})
+
+                                view_count_raw = statistics.get("viewCount", "0")
+                                view_count = int(view_count_raw) if str(view_count_raw).isdigit() else 0
+
+                                if view_count >= min_views:
+                                    url = f"https://www.youtube.com/watch?v={vid}"
+                                    title = snippet.get("title", "Sem título")
+                                    channel = snippet.get("channelTitle", "Canal desconhecido")
+
+                                    video_links.append(url)
+                                    video_details.append({
+                                        "title": title,
+                                        "channel": channel,
+                                        "url": url,
+                                        "views": view_count
+                                    })
+
+                            if video_links:
+                                links_text = "\n".join(video_links)
+                                st.session_state.search_results = {
+                                    "keyword": keyword.strip(),
+                                    "min_views": min_views,
+                                    "video_links": video_links,
+                                    "video_details": video_details,
+                                    "links_text": links_text
+                                }
+                            else:
+                                st.session_state.search_results = None
+                                st.warning(f"Foram encontrados vídeos, mas nenhum atingiu o mínimo de **{min_views:,}** visualizações.".replace(",", "."))
+                        else:
+                            st.session_state.search_results = None
+                            err_info = videos_data.get("error", {})
+                            st.error(f"❌ Erro ao consultar detalhes dos vídeos: {err_info.get('message', 'Erro desconhecido')}")
                     else:
                         st.session_state.search_results = None
                         st.info("Nenhum vídeo encontrado para essa palavra-chave.")
 
                 else:
                     st.session_state.search_results = None
-                    error_info = data.get("error", {})
+                    error_info = search_data.get("error", {})
                     error_message = error_info.get("message", "Erro desconhecido ao consultar a API.")
-                    error_code = error_info.get("code", response.status_code)
+                    error_code = error_info.get("code", search_response.status_code)
                     
                     st.error(f"❌ **Erro na requisição ({error_code})**: {error_message}")
                     if error_code == 403:
@@ -228,11 +283,13 @@ if search_clicked:
 if st.session_state.search_results:
     results = st.session_state.search_results
     keyword_used = results["keyword"]
+    min_views_used = results.get("min_views", 0)
     video_links = results["video_links"]
     video_details = results["video_details"]
     links_text = results["links_text"]
 
-    st.success(f"Foram encontrados **{len(video_links)}** vídeos para a busca: *'{keyword_used}'*")
+    filter_msg = f" (com mínimo de {min_views_used:,} views)".replace(",", ".") if min_views_used > 0 else ""
+    st.success(f"Foram encontrados **{len(video_links)}** vídeos para a busca: *'{keyword_used}'*{filter_msg}")
     
     # Text area para cópia em massa
     st.subheader("📋 Links extraídos (prontos para cópia)")
@@ -265,9 +322,13 @@ if st.session_state.search_results:
         if st.button("🗑️ Limpar", use_container_width=True):
             st.session_state.search_results = None
             st.session_state.keyword_input = ""
+            st.session_state.min_views_input = 0
             st.rerun()
 
-    # Exibição dos detalhes dos vídeos encontrados
+    # Exibição dos detalhes dos vídeos encontrados com contagem de views formatada
     with st.expander("🔍 Ver detalhes dos vídeos encontrados"):
         for idx, detail in enumerate(video_details, 1):
-            st.markdown(f"**{idx}. [{detail['title']}]({detail['url']})** — *{detail['channel']}*")
+            views_formatted = f"{detail['views']:,}".replace(",", ".")
+            st.markdown(
+                f"**{idx}. [{detail['title']}]({detail['url']})** — 👁️ **{views_formatted}** visualizações — *{detail['channel']}*"
+            )
