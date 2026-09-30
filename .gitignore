@@ -1,0 +1,9 @@
+# Streamlit secrets (NUNCA envie para o GitHub)
+.streamlit/secrets.toml
+
+# Python cache & virtualenv
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
