@@ -4,6 +4,7 @@ import requests
 import json
 import time
 import re
+from datetime import datetime
 
 # Configuração da página
 st.set_page_config(
@@ -289,13 +290,24 @@ if search_clicked:
                         title = snippet.get("title", "Sem título")
                         channel = snippet.get("channelTitle", "Canal desconhecido")
 
+                        # Extração e formatação da data de publicação
+                        published_raw = snippet.get("publishedAt", "")
+                        published_date = "N/D"
+                        if published_raw:
+                            try:
+                                dt = datetime.fromisoformat(published_raw.replace("Z", "+00:00"))
+                                published_date = dt.strftime("%d/%m/%Y")
+                            except Exception:
+                                published_date = published_raw[:10]
+
                         video_links.append(url)
                         video_details.append({
                             "title": title,
                             "channel": channel,
                             "url": url,
                             "views": view_count,
-                            "subscribers": subscriber_count
+                            "subscribers": subscriber_count,
+                            "published_date": published_date
                         })
 
                 if video_links:
@@ -368,8 +380,9 @@ if st.session_state.search_results:
         for idx, detail in enumerate(video_details, 1):
             views_formatted = f"{detail['views']:,}".replace(",", ".")
             subs_formatted = format_compact_number(detail.get("subscribers", 0))
+            published_formatted = detail.get("published_date", "N/D")
             # Sanitização de colchetes no Markdown para não quebrar hiperlinks
             safe_title = detail['title'].replace("[", "\\[").replace("]", "\\]")
             st.markdown(
-                f"**{idx}. [{safe_title}]({detail['url']})** — 👁️ **{views_formatted}** views — 👤 *{detail['channel']}* (**{subs_formatted}** inscritos)"
+                f"**{idx}. [{safe_title}]({detail['url']})** — 📅 {published_formatted} — 👁️ **{views_formatted}** views — 👤 *{detail['channel']}* (**{subs_formatted}** inscritos)"
             )
