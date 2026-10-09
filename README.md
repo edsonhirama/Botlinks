@@ -6,7 +6,10 @@ Aplicação web desenvolvida em **Streamlit** para buscar e extrair links de ví
 
 ## ✨ Funcionalidades
 
-- 🔍 **Busca Otimizada**: Retorna até 50 vídeos mais relevantes por palavra-chave.
+- 🔍 **Busca Otimizada**: Retorna até 50 vídeos mais relevantes ou visualizados por palavra-chave.
+- 🌐 **Filtro de Idioma**: Priorize conteúdos por idioma (Alemão, Inglês, Português, Espanhol, Francês, etc.) via `relevanceLanguage`.
+- 📊 **Critério de Ordenação**: Alterne entre Mais Visualizados, Relevância ou Mais Recentes.
+- 🎯 **Filtro Estrito no Título**: Opção para exigir que todas as palavras pesquisadas (ou frase exata) estejam contidas no título do vídeo.
 - 📋 **Cópia em Massa**: Botão com HTML/JavaScript para copiar todos os links com 1 clique diretamente para o clipboard.
 - 💾 **Download em .txt**: Baixe a lista de links gerada instantaneamente.
 - 🗑️ **Limpeza de Estado**: Botão para resetar a busca e limpar a tela com `st.session_state`.

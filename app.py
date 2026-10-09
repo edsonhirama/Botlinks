@@ -29,12 +29,41 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Mapeamento de Idiomas para ISO 639-1
+LANGUAGE_OPTIONS = {
+    "Qualquer Idioma": "",
+    "Alemão (de)": "de",
+    "Inglês (en)": "en",
+    "Português (pt)": "pt",
+    "Espanhol (es)": "es",
+    "Francês (fr)": "fr",
+    "Italiano (it)": "it",
+    "Holandês (nl)": "nl",
+    "Japonês (ja)": "ja"
+}
+
+# Mapeamento de Ordenação
+ORDER_OPTIONS = {
+    "Mais Visualizados": "viewCount",
+    "Relevância": "relevance",
+    "Mais Recentes": "date"
+}
+
 # Inicialização do estado da sessão (st.session_state)
 if "search_results" not in st.session_state:
     st.session_state.search_results = None
 
 if "keyword_input" not in st.session_state:
     st.session_state.keyword_input = ""
+
+if "language_input" not in st.session_state:
+    st.session_state.language_input = "Qualquer Idioma"
+
+if "order_input" not in st.session_state:
+    st.session_state.order_input = "Mais Visualizados"
+
+if "strict_title_input" not in st.session_state:
+    st.session_state.strict_title_input = False
 
 if "min_views_input" not in st.session_state:
     st.session_state.min_views_input = 0
@@ -49,7 +78,7 @@ if "last_search_time" not in st.session_state:
 # Camada de Cache para Economia de Quota (1 hora de TTL)
 # -------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_youtube_data(keyword: str, api_key: str):
+def fetch_youtube_data(keyword: str, api_key: str, language: str = "", order: str = "viewCount"):
     """
     Executa a busca no YouTube Data API com cache em memória
     para economizar a quota diária (102 unidades por busca).
@@ -60,9 +89,11 @@ def fetch_youtube_data(keyword: str, api_key: str):
         "q": keyword,
         "type": "video",
         "maxResults": 50,
-        "order": "viewCount",
+        "order": order,
         "key": api_key
     }
+    if language:
+        search_params["relevanceLanguage"] = language
     
     headers = {
         "User-Agent": "Botlinks-Extractor/1.0"
@@ -221,6 +252,26 @@ keyword = st.text_input(
     key="keyword_input"
 )
 
+# Linha 1 de Filtros: Idioma e Ordenação
+col_lang, col_order = st.columns(2)
+
+with col_lang:
+    selected_language = st.selectbox(
+        label="Idioma do Vídeo:",
+        options=list(LANGUAGE_OPTIONS.keys()),
+        key="language_input",
+        help="Prioriza conteúdos no idioma selecionado via relevanceLanguage da API do YouTube."
+    )
+
+with col_order:
+    selected_order = st.selectbox(
+        label="Ordenar por:",
+        options=list(ORDER_OPTIONS.keys()),
+        key="order_input",
+        help="Critério de ordenação da busca da API do YouTube."
+    )
+
+# Linha 2 de Filtros: Visualizações e Inscritos Mínimos
 col_views, col_subs = st.columns(2)
 
 with col_views:
@@ -245,6 +296,14 @@ with col_subs:
         help="Filtra apenas canais com inscritos iguais ou maiores que este valor."
     )
 
+# Opção de Correspondência Estrita no Título
+strict_title = st.checkbox(
+    label="🎯 Exigir termo no título do vídeo",
+    value=False,
+    key="strict_title_input",
+    help="Descarta vídeos cujo título não contenha as palavras pesquisadas (impede que vídeos com termos apenas na descrição, tags ou em outros idiomas sejam listados)."
+)
+
 search_clicked = st.button("Buscar Links", type="primary", use_container_width=True)
 
 if search_clicked:
@@ -260,7 +319,10 @@ if search_clicked:
         st.session_state.last_search_time = current_time
         with st.spinner("Consultando YouTube Data API v3 (com cache ativado)..."):
             clean_keyword = " ".join(keyword.strip().split())
-            result = fetch_youtube_data(clean_keyword, api_key)
+            lang_code = LANGUAGE_OPTIONS.get(selected_language, "")
+            order_code = ORDER_OPTIONS.get(selected_order, "viewCount")
+
+            result = fetch_youtube_data(clean_keyword, api_key, language=lang_code, order=order_code)
 
             if "error" in result:
                 err = result["error"]
@@ -275,11 +337,33 @@ if search_clicked:
                 video_links = []
                 video_details = []
 
+                # Preparação dos termos para verificação no título
+                keywords_to_check = []
+                exact_phrase_mode = False
+                if strict_title:
+                    if clean_keyword.startswith('"') and clean_keyword.endswith('"') and len(clean_keyword) > 2:
+                        keywords_to_check = [clean_keyword[1:-1].strip().lower()]
+                        exact_phrase_mode = True
+                    else:
+                        keywords_to_check = [w.lower() for w in clean_keyword.split() if w.strip()]
+
                 for item in video_items:
                     vid = item.get("id")
                     snippet = item.get("snippet", {})
                     statistics = item.get("statistics", {})
                     cid = snippet.get("channelId")
+
+                    title = snippet.get("title", "Sem título")
+                    title_lower = title.lower()
+
+                    # Validação de correspondência no título
+                    if strict_title:
+                        if exact_phrase_mode:
+                            if keywords_to_check[0] not in title_lower:
+                                continue
+                        else:
+                            if not all(w in title_lower for w in keywords_to_check):
+                                continue
 
                     view_count_raw = statistics.get("viewCount", "0")
                     view_count = int(view_count_raw) if str(view_count_raw).isdigit() else 0
@@ -287,7 +371,6 @@ if search_clicked:
 
                     if view_count >= min_views and subscriber_count >= min_subs:
                         url = f"https://www.youtube.com/watch?v={vid}"
-                        title = snippet.get("title", "Sem título")
                         channel = snippet.get("channelTitle", "Canal desconhecido")
 
                         # Extração e formatação da data de publicação
@@ -314,6 +397,9 @@ if search_clicked:
                     links_text = "\n".join(video_links)
                     st.session_state.search_results = {
                         "keyword": clean_keyword,
+                        "language": selected_language,
+                        "order": selected_order,
+                        "strict_title": strict_title,
                         "min_views": min_views,
                         "min_subs": min_subs,
                         "video_links": video_links,
@@ -330,6 +416,9 @@ if search_clicked:
 if st.session_state.search_results:
     results = st.session_state.search_results
     keyword_used = results["keyword"]
+    language_used = results.get("language", "Qualquer Idioma")
+    order_used = results.get("order", "Mais Visualizados")
+    strict_title_used = results.get("strict_title", False)
     min_views_used = results.get("min_views", 0)
     min_subs_used = results.get("min_subs", 0)
     video_links = results["video_links"]
@@ -337,6 +426,12 @@ if st.session_state.search_results:
     links_text = results["links_text"]
 
     filter_tags = []
+    if language_used != "Qualquer Idioma":
+        filter_tags.append(f"Idioma: {language_used}")
+    if order_used != "Mais Visualizados":
+        filter_tags.append(f"Ordem: {order_used}")
+    if strict_title_used:
+        filter_tags.append("Termo no título")
     if min_views_used > 0:
         filter_tags.append(f"≥ {min_views_used:,} views".replace(",", "."))
     if min_subs_used > 0:
@@ -372,6 +467,9 @@ if st.session_state.search_results:
         if st.button("🗑️ Limpar", use_container_width=True):
             st.session_state.search_results = None
             st.session_state.keyword_input = ""
+            st.session_state.language_input = "Qualquer Idioma"
+            st.session_state.order_input = "Mais Visualizados"
+            st.session_state.strict_title_input = False
             st.session_state.min_views_input = 0
             st.session_state.min_subs_input = 0
             st.rerun()
