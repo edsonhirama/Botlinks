@@ -7,7 +7,7 @@ Aplicação web desenvolvida em **Streamlit** para buscar e extrair links de ví
 ## ✨ Funcionalidades
 
 - 🔍 **Busca Otimizada**: Retorna até 50 vídeos mais relevantes ou visualizados por palavra-chave.
-- 💾 **Salvar Pesquisas (Acumular sem Repetir)**: Salva os vídeos encontrados e, ao clicar novamente em buscar para o mesmo termo, navega automaticamente pelas próximas páginas da API trazendo apenas vídeos novos e diferentes, sem duplicatas.
+- 💾 **Salvar Pesquisas (Acumular sem Repetir)**: Mantém o histórico salvo mesmo ao trocar de palavra-chave, garantindo que vídeos já enviados nunca se repitam em pesquisas diferentes. Ao desmarcar a flag ou clicar em Limpar, o histórico é zerado imediatamente para buscas independentes.
 - 📑 **Abas de Visualização**: Alterne entre a lista completa de **Todos os Links Acumulados** e **Novos desta Busca**, com botões dedicados de cópia e download para cada uma.
 - 🌐 **Filtro de Idioma**: Priorize conteúdos por idioma (Alemão, Inglês, Português, Espanhol, Francês, etc.) via `relevanceLanguage`.
 - 📊 **Critério de Ordenação**: Alterne entre Mais Visualizados, Relevância ou Mais Recentes.

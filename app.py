@@ -86,6 +86,9 @@ if "accumulated_links" not in st.session_state:
 if "accumulated_details" not in st.session_state:
     st.session_state.accumulated_details = []
 
+if "accumulated_keywords" not in st.session_state:
+    st.session_state.accumulated_keywords = []
+
 if "next_page_token" not in st.session_state:
     st.session_state.next_page_token = ""
 
@@ -209,10 +212,23 @@ def clear_all_state():
     st.session_state.accumulated_video_ids = []
     st.session_state.accumulated_links = []
     st.session_state.accumulated_details = []
+    st.session_state.accumulated_keywords = []
     st.session_state.next_page_token = ""
     st.session_state.last_search_keyword = ""
     st.session_state.last_search_filters = {}
     st.session_state.search_count = 0
+
+def on_save_searches_toggle():
+    """Ao desmarcar a flag, zera o histórico acumulado imediatamente para reinicializar as buscas."""
+    if not st.session_state.get("save_searches_input", False):
+        st.session_state.accumulated_video_ids = []
+        st.session_state.accumulated_links = []
+        st.session_state.accumulated_details = []
+        st.session_state.accumulated_keywords = []
+        st.session_state.next_page_token = ""
+        st.session_state.search_count = 0
+        if st.session_state.search_results and st.session_state.search_results.get("save_searches"):
+            st.session_state.search_results = None
 
 def render_copy_button(text_to_copy: str, label: str = "📋 Copiar Todos"):
     """Renderiza o botão de cópia com sanitização contra quebra de tag script."""
@@ -360,16 +376,18 @@ with col_opt2:
         label="💾 Salvar pesquisas (acumular sem repetir)",
         value=False,
         key="save_searches_input",
-        help="Salva os vídeos encontrados. Ao clicar em buscar novamente para o mesmo termo, consulta as próximas páginas da API trazendo apenas novos vídeos sem repetir os anteriores."
+        on_change=on_save_searches_toggle,
+        help="Mantém salvos todos os links encontrados em qualquer pesquisa. Mesmo se você mudar a palavra-chave, novos vídeos já enviados não se repetem. Para zerar o histórico, basta desmarcar esta flag ou clicar em Limpar."
     )
 
 # Identificação de busca continuada (para botão dinâmico)
-is_continuing_search = (
-    save_searches 
-    and len(st.session_state.accumulated_video_ids) > 0 
-    and keyword.strip().lower() == st.session_state.last_search_keyword.lower()
-)
-button_label = "Buscar Mais Links (Próxima Página) ➕" if is_continuing_search else "Buscar Links"
+if save_searches and len(st.session_state.accumulated_video_ids) > 0:
+    if keyword.strip().lower() == st.session_state.last_search_keyword.lower():
+        button_label = "Buscar Mais Links Deste Termo (Próxima Página) ➕"
+    else:
+        button_label = "Buscar Links e Acumular ao Histórico ➕"
+else:
+    button_label = "Buscar Links"
 
 search_clicked = st.button(button_label, type="primary", use_container_width=True)
 
@@ -388,29 +406,38 @@ if search_clicked:
         order_code = ORDER_OPTIONS.get(selected_order, "viewCount")
         current_query_filters = {"lang": lang_code, "order": order_code}
 
-        is_same_query = (
-            clean_keyword.lower() == st.session_state.last_search_keyword.lower()
-            and current_query_filters == st.session_state.last_search_filters
-        )
+        is_same_keyword = clean_keyword.lower() == st.session_state.last_search_keyword.lower()
+        is_same_filters = current_query_filters == st.session_state.last_search_filters
+        is_same_query = is_same_keyword and is_same_filters
 
-        if not is_same_query:
-            # Palavra-chave ou filtros alterados: reinicia histórico acumulado automaticamente
+        page_token_to_fetch = ""
+        should_abort = False
+
+        if save_searches:
+            # FLAG ATIVA: Histórico acumulado NUNCA é zerado na mudança de palavra-chave
+            if is_same_query and len(st.session_state.accumulated_video_ids) > 0:
+                # Mesmo termo e filtros: avança para a próxima página
+                page_token_to_fetch = st.session_state.next_page_token
+                if not page_token_to_fetch:
+                    st.warning("⚠️ Todas as páginas de resultados disponíveis para este termo no YouTube já foram consultadas. Digite outra palavra-chave para continuar acumulando novos vídeos.")
+                    should_abort = True
+            else:
+                # Nova palavra-chave ou novos filtros: consulta página 1 do novo termo mantendo vídeos acumulados
+                page_token_to_fetch = ""
+                st.session_state.next_page_token = ""
+                st.session_state.last_search_keyword = clean_keyword
+                st.session_state.last_search_filters = current_query_filters
+        else:
+            # FLAG DESMARCADA: Pesquisa zerada a cada busca / nova palavra
             st.session_state.accumulated_video_ids = []
             st.session_state.accumulated_links = []
             st.session_state.accumulated_details = []
+            st.session_state.accumulated_keywords = []
             st.session_state.next_page_token = ""
             st.session_state.search_count = 0
             st.session_state.last_search_keyword = clean_keyword
             st.session_state.last_search_filters = current_query_filters
-
-        # Determina o token da página para busca
-        page_token_to_fetch = ""
-        should_abort = False
-        if save_searches and is_same_query and len(st.session_state.accumulated_video_ids) > 0:
-            page_token_to_fetch = st.session_state.next_page_token
-            if not page_token_to_fetch:
-                st.warning("⚠️ Todas as páginas de resultados disponíveis para esta pesquisa no YouTube já foram consultadas.")
-                should_abort = True
+            page_token_to_fetch = ""
 
         if not should_abort:
             st.session_state.last_search_time = current_time
@@ -456,7 +483,7 @@ if search_clicked:
                         if not vid:
                             continue
 
-                        # Se a flag de salvar pesquisas estiver ativa, descarta vídeos já salvos anteriormente
+                        # Se a flag de salvar pesquisas estiver ativa, descarta QUALQUER vídeo já salvo em qualquer busca anterior
                         if save_searches and vid in saved_ids_set:
                             continue
 
@@ -503,7 +530,8 @@ if search_clicked:
                                 "url": url,
                                 "views": view_count,
                                 "subscribers": subscriber_count,
-                                "published_date": published_date
+                                "published_date": published_date,
+                                "keyword": clean_keyword
                             })
 
                     if save_searches:
@@ -513,11 +541,14 @@ if search_clicked:
                         st.session_state.search_count += 1
                         st.session_state.last_search_keyword = clean_keyword
                         st.session_state.last_search_filters = current_query_filters
+                        if clean_keyword not in st.session_state.accumulated_keywords:
+                            st.session_state.accumulated_keywords.append(clean_keyword)
 
                         if len(st.session_state.accumulated_links) > 0:
                             links_text = "\n".join(st.session_state.accumulated_links)
                             st.session_state.search_results = {
                                 "keyword": clean_keyword,
+                                "keywords_list": list(st.session_state.accumulated_keywords),
                                 "language": selected_language,
                                 "order": selected_order,
                                 "strict_title": strict_title,
@@ -532,7 +563,7 @@ if search_clicked:
                                 "links_text": links_text
                             }
                             if len(current_video_links) == 0:
-                                st.info("ℹ️ Nenhum novo vídeo atendeu aos filtros nesta página de busca. O histórico acumulado anterior foi preservado.")
+                                st.info("ℹ️ Nenhum vídeo inédito atendeu aos filtros nesta rodada. O histórico acumulado anterior foi preservado.")
                         else:
                             st.session_state.search_results = None
                             st.warning("Nenhum vídeo atendeu aos critérios de filtros estabelecidos.")
@@ -540,12 +571,14 @@ if search_clicked:
                         st.session_state.accumulated_video_ids = []
                         st.session_state.accumulated_links = []
                         st.session_state.accumulated_details = []
+                        st.session_state.accumulated_keywords = []
                         st.session_state.search_count = 1
 
                         if current_video_links:
                             links_text = "\n".join(current_video_links)
                             st.session_state.search_results = {
                                 "keyword": clean_keyword,
+                                "keywords_list": [clean_keyword],
                                 "language": selected_language,
                                 "order": selected_order,
                                 "strict_title": strict_title,
@@ -569,6 +602,7 @@ if search_clicked:
 if st.session_state.search_results:
     results = st.session_state.search_results
     keyword_used = results["keyword"]
+    keywords_list = results.get("keywords_list", [keyword_used])
     language_used = results.get("language", "Qualquer Idioma")
     order_used = results.get("order", "Mais Visualizados")
     strict_title_used = results.get("strict_title", False)
@@ -580,7 +614,7 @@ if st.session_state.search_results:
     accumulated_links = results.get("accumulated_links", new_links)
     accumulated_details = results.get("accumulated_details", new_details)
     search_count_used = results.get("search_count", 1)
-    safe_filename = sanitize_filename(keyword_used)
+    safe_filename = sanitize_filename("_".join(keywords_list)[:35])
 
     filter_tags = []
     if language_used != "Qualquer Idioma":
@@ -598,7 +632,8 @@ if st.session_state.search_results:
     filter_msg = f" ({', '.join(filter_tags)})" if filter_tags else ""
 
     if save_searches_used:
-        st.success(f"Busca: *'{keyword_used}'*{filter_msg} — Total acumulado: **{len(accumulated_links)} vídeos**")
+        keywords_display = ", ".join(f"'{k}'" for k in keywords_list)
+        st.success(f"Termos pesquisados: **{keywords_display}**{filter_msg} — Total acumulado: **{len(accumulated_links)} vídeos**")
         
         m_col1, m_col2, m_col3 = st.columns(3)
         with m_col1:
@@ -606,7 +641,7 @@ if st.session_state.search_results:
         with m_col2:
             st.metric("Novos nesta Busca", f"{len(new_links)} vídeos")
         with m_col3:
-            st.metric("Páginas Consultadas", f"{search_count_used}ª busca")
+            st.metric("Buscas Realizadas", f"{search_count_used} rodadas")
 
         st.subheader("📋 Links extraídos")
         tab_all, tab_new = st.tabs([
